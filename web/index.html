@@ -1,0 +1,652 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Скорость удара</title>
+<style>
+  :root {
+    --ink: #0e2233;
+    --panel: rgba(255, 255, 255, 0.86);
+    --panel-line: rgba(14, 34, 51, 0.12);
+    --accent: #e8590c;
+    --ok: #2b8a3e;
+    --warn: #c92a2a;
+    --muted: #4c6272;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+    color: var(--ink);
+    background: linear-gradient(#7fc4ee 0%, #cfeaf8 62%, #bfe3f5 100%);
+  }
+  #c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  .card {
+    background: var(--panel);
+    backdrop-filter: blur(6px);
+    border: 1px solid var(--panel-line);
+    border-radius: 14px;
+    padding: 12px 14px;
+  }
+  .hud { position: fixed; pointer-events: none; }
+  .hud .card, .hud button, .hud input { pointer-events: auto; }
+
+  /* Главное число */
+  #hero { top: 16px; left: 50%; transform: translateX(-50%); text-align: center; min-width: 230px; }
+  #hero .label { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  #speed { font-size: 72px; line-height: 1; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--accent); }
+  #speed small { font-size: 26px; font-weight: 700; color: var(--ink); margin-left: 6px; }
+  #kmh { font-size: 15px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #details { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px 12px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+  #details b { display: block; font-size: 15px; color: var(--ink); font-variant-numeric: tabular-nums; }
+
+  /* Подключение */
+  #conn { top: 16px; left: 16px; width: 270px; }
+  #conn h1 { font-size: 15px; margin: 0 0 8px; }
+  .status { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 10px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #999; flex: none; }
+  .dot.ok { background: var(--ok); }
+  .dot.wait { background: #f08c00; }
+  .dot.err { background: var(--warn); }
+  button {
+    font: inherit; font-weight: 600; font-size: 13px; cursor: pointer;
+    border: 0; border-radius: 9px; padding: 9px 12px; color: #fff; background: var(--ink);
+  }
+  button:hover { filter: brightness(1.15); }
+  button.secondary { background: #e3ebf1; color: var(--ink); }
+  button:focus-visible, input:focus-visible { outline: 3px solid #1c7ed6; outline-offset: 2px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .meter { margin-top: 12px; }
+  .meter .bar { height: 10px; background: #dbe6ee; border-radius: 6px; overflow: hidden; position: relative; }
+  .meter .fill { position: absolute; inset: 0 auto 0 0; width: 0; background: linear-gradient(90deg, #2f9e44, #f08c00, #e03131); }
+  .meter .peak { position: absolute; top: 0; bottom: 0; width: 3px; background: var(--ink); left: 0; }
+  .meter .cap { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-top: 4px; font-variant-numeric: tabular-nums; }
+
+  /* История */
+  #history { top: 16px; right: 16px; width: 210px; }
+  #history h2 { font-size: 12px; margin: 0 0 6px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  #history ol { margin: 0; padding: 0; list-style: none; font-size: 14px; font-variant-numeric: tabular-nums; }
+  #history li { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px dashed var(--panel-line); }
+  #history li.best { font-weight: 800; color: var(--accent); }
+  #history .empty { color: var(--muted); font-size: 13px; }
+
+  /* Управление тестом */
+  #test { bottom: 16px; left: 16px; width: 300px; }
+  #test label { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-top: 8px; }
+  #test input[type=range] { width: 100%; accent-color: var(--accent); }
+  #test .row { margin-top: 10px; }
+  #hint { bottom: 16px; right: 16px; font-size: 12px; color: var(--muted); max-width: 260px; }
+
+  @media (max-width: 860px) {
+    #history { display: none; }
+    #hero { top: auto; bottom: 150px; }
+    #speed { font-size: 52px; }
+    #conn { width: 220px; }
+    #test { width: calc(100% - 32px); }
+    #hint { display: none; }
+  }
+</style>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+<canvas id="c" aria-label="3D-сцена: нога бьёт по мячу"></canvas>
+
+<div class="hud card" id="conn">
+  <h1>⚽ Скорость удара</h1>
+  <div class="status"><span class="dot" id="dot"></span><span id="statusText">Не подключено</span></div>
+  <div class="row">
+    <button id="btnConnect">Подключить ESP32</button>
+    <button id="btnDisconnect" class="secondary" hidden>Отключить</button>
+  </div>
+  <div class="meter" aria-label="Угловая скорость ноги">
+    <div class="bar"><div class="fill" id="meterFill"></div><div class="peak" id="meterPeak"></div></div>
+    <div class="cap"><span id="meterVal">0 °/с</span><span>макс. 2000 °/с</span></div>
+  </div>
+</div>
+
+<div class="hud card" id="hero" role="status" aria-live="polite">
+  <div class="label">Скорость мяча</div>
+  <div id="speed">0.0<small>м/с</small></div>
+  <div id="kmh">0 км/ч</div>
+  <div id="details">
+    <div>Стопа<b id="dFoot">–</b></div>
+    <div>Дальность<b id="dDist">–</b></div>
+    <div>Высота<b id="dH">–</b></div>
+  </div>
+</div>
+
+<div class="hud card" id="history">
+  <h2>Удары</h2>
+  <ol id="histList"><li class="empty">Пока нет ударов</li></ol>
+</div>
+
+<div class="hud card" id="test">
+  <div class="row">
+    <button id="btnKick">Тестовый удар (Пробел)</button>
+    <button id="btnReset" class="secondary">Сброс</button>
+  </div>
+  <label>Скорость мяча в тесте <span id="vTestVal">22 м/с</span></label>
+  <input type="range" id="vTest" min="5" max="35" step="0.5" value="22">
+  <label>Угол вылета <span id="angVal">18°</span></label>
+  <input type="range" id="ang" min="3" max="50" step="1" value="18">
+</div>
+
+<div class="hud card" id="hint">Нужен Chrome или Edge: подключение к ESP32 идёт через Web Serial по USB.</div>
+
+<script type="module">
+import * as THREE from 'three';
+
+/* ===================== Константы ===================== */
+const BALL_R = 0.11;          // м
+const BALL_M = 0.43;          // кг
+const PLAT_H = 0.2;           // высота платформы, м
+const PLAT_R = 0.3;
+const G = 9.81;
+const RHO = 1.2, CD = 0.25;
+const L_THIGH = 0.46, L_SHANK = 0.44;
+const HIP_X = -0.72, HIP_Y = 0.95;
+const BALL_REST = new THREE.Vector3(0, PLAT_H + BALL_R, 0);
+
+/* ===================== Сцена ===================== */
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0xbfe3f5, 40, 150);
+
+const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 400);
+const CAM_IDLE = new THREE.Vector3(0.9, 1.25, 4.3);
+const LOOK_IDLE = new THREE.Vector3(-0.3, 0.7, 0);
+camera.position.copy(CAM_IDLE);
+const camLook = LOOK_IDLE.clone();
+
+scene.add(new THREE.HemisphereLight(0xdff2ff, 0x4d7a3a, 0.9));
+const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+sun.position.set(-3, 6, 4);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -3, right: 3, top: 3, bottom: -3, near: 1, far: 15 });
+sun.shadow.bias = -0.0005;
+scene.add(sun);
+
+/* --- Поле: полосы по 5 м и метки дистанции --- */
+function textSprite(text) {
+  const c = document.createElement('canvas'); c.width = 128; c.height = 64;
+  const x = c.getContext('2d');
+  x.font = 'bold 40px Segoe UI, sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.fillStyle = 'rgba(255,255,255,.95)'; x.fillText(text, 64, 34);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, transparent: true, depthWrite: false }));
+  s.scale.set(2, 1, 1);
+  return s;
+}
+const field = new THREE.Group();
+const stripeGeo = new THREE.BoxGeometry(5, 0.02, 60);
+for (let i = -3; i < 32; i++) {
+  const m = new THREE.Mesh(stripeGeo, new THREE.MeshStandardMaterial({ color: i % 2 ? 0x3f8f3a : 0x4a9d44, roughness: 1 }));
+  m.position.set(i * 5 + 2.5, -0.01, 0);
+  m.receiveShadow = true;
+  field.add(m);
+}
+for (let d = 5; d <= 150; d += 5) {
+  const lbl = textSprite(d + ' м');
+  lbl.position.set(d, 0.5, -4);
+  field.add(lbl);
+  const tick = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.025, 8), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55 }));
+  tick.position.set(d, 0.005, -0.0);
+  field.add(tick);
+}
+scene.add(field);
+
+/* --- Платформа --- */
+const platform = new THREE.Group();
+const platTop = new THREE.Mesh(new THREE.CylinderGeometry(PLAT_R, PLAT_R + 0.03, PLAT_H, 48),
+  new THREE.MeshStandardMaterial({ color: 0xe9ecef, roughness: 0.55, metalness: 0.1 }));
+platTop.position.y = PLAT_H / 2;
+platTop.castShadow = true; platTop.receiveShadow = true;
+const platRing = new THREE.Mesh(new THREE.TorusGeometry(PLAT_R - 0.02, 0.012, 8, 48),
+  new THREE.MeshStandardMaterial({ color: 0xe8590c, roughness: 0.4 }));
+platRing.rotation.x = Math.PI / 2; platRing.position.y = PLAT_H + 0.002;
+platform.add(platTop, platRing);
+scene.add(platform);
+
+/* --- Мяч --- */
+function ballTexture() {
+  const W = 1024, H = 512;
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const x = c.getContext('2d');
+  x.fillStyle = '#f8f9fa'; x.fillRect(0, 0, W, H);
+  x.fillStyle = '#1b1f23';
+  const pent = (cx, cy, r) => {
+    x.beginPath();
+    for (let i = 0; i < 5; i++) {
+      const a = -Math.PI / 2 + i * 2 * Math.PI / 5;
+      x.lineTo(cx + Math.cos(a) * r * 1.5, cy + Math.sin(a) * r);
+    }
+    x.closePath(); x.fill();
+  };
+  // условная раскладка 12 пятиугольников на развёртке
+  pent(W / 2, 40, 36); pent(W / 2, H - 40, 36);
+  for (let i = 0; i < 5; i++) {
+    pent((i + 0.5) * W / 5, H * 0.3, 40);
+    pent((i + 1.0) * W / 5, H * 0.7, 40);
+  }
+  x.strokeStyle = 'rgba(40,40,40,.35)'; x.lineWidth = 3;
+  for (let i = 0; i < 5; i++) {
+    x.beginPath(); x.moveTo((i + 0.5) * W / 5, H * 0.3 + 30); x.lineTo((i + 1) * W / 5, H * 0.7 - 30); x.stroke();
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+  return t;
+}
+const ball = new THREE.Mesh(new THREE.SphereGeometry(BALL_R, 48, 32),
+  new THREE.MeshStandardMaterial({ map: ballTexture(), roughness: 0.45 }));
+ball.castShadow = true;
+scene.add(ball);
+
+const blob = new THREE.Mesh(new THREE.CircleGeometry(BALL_R * 1.3, 24),
+  new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35, depthWrite: false }));
+blob.rotation.x = -Math.PI / 2;
+scene.add(blob);
+
+/* --- Игрок: таз, торс, голова, две ноги --- */
+const skin = new THREE.MeshStandardMaterial({ color: 0xf0c3a0, roughness: 0.7 });
+const shortsM = new THREE.MeshStandardMaterial({ color: 0x1c4e9a, roughness: 0.8 });
+const jerseyM = new THREE.MeshStandardMaterial({ color: 0xd9480f, roughness: 0.8 });
+const sockM = new THREE.MeshStandardMaterial({ color: 0xf1f3f5, roughness: 0.8 });
+const bootM = new THREE.MeshStandardMaterial({ color: 0x15171a, roughness: 0.35, metalness: 0.2 });
+const accentM = new THREE.MeshStandardMaterial({ color: 0xe8590c, roughness: 0.5 });
+
+const player = new THREE.Group();
+scene.add(player);
+function add(parent, mesh) { mesh.castShadow = true; mesh.receiveShadow = true; parent.add(mesh); return mesh; }
+
+const pelvis = add(player, new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.18, 0.34), shortsM));
+pelvis.position.set(HIP_X, HIP_Y + 0.04, -0.1);
+const torso = add(player, new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.17, 0.55, 20), jerseyM));
+torso.position.set(HIP_X, HIP_Y + 0.4, -0.1);
+const head = add(player, new THREE.Mesh(new THREE.SphereGeometry(0.11, 24, 16), skin));
+head.position.set(HIP_X + 0.02, HIP_Y + 0.82, -0.1);
+
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
+function limbMesh(rBottom, rTop, mat) {
+  const g = new THREE.CylinderGeometry(rTop, rBottom, 1, 18);
+  g.translate(0, 0.5, 0);
+  const m = new THREE.Mesh(g, mat);
+  m.castShadow = true; m.receiveShadow = true;
+  return m;
+}
+function placeLimb(m, a, b) {
+  const d = new THREE.Vector3().subVectors(b, a);
+  const len = d.length();
+  m.position.copy(a);
+  m.scale.set(1, len, 1);
+  m.quaternion.setFromUnitVectors(Y_AXIS, d.normalize());
+}
+function makeBoot() {
+  const g = new THREE.Group();
+  const body = add(g, new THREE.Mesh(new THREE.BoxGeometry(0.27, 0.075, 0.1), bootM));
+  body.position.set(0.09, -0.02, 0);
+  const toe = add(g, new THREE.Mesh(new THREE.SphereGeometry(0.05, 16, 12), bootM));
+  toe.scale.set(1.2, 0.8, 1); toe.position.set(0.225, -0.02, 0);
+  const stripe = add(g, new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.078, 0.102), accentM));
+  stripe.position.set(0.08, -0.02, 0);
+  for (const sx of [0.0, 0.07, 0.16, 0.22]) for (const sz of [-0.03, 0.03]) {
+    const stud = add(g, new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.012, 0.025, 8), sockM));
+    stud.position.set(sx, -0.07, sz);
+  }
+  return g;
+}
+function makeLeg(z) {
+  const L = {
+    z,
+    thigh: limbMesh(0.07, 0.085, shortsM),
+    shank: limbMesh(0.045, 0.062, sockM),
+    kneeMesh: new THREE.Mesh(new THREE.SphereGeometry(0.062, 16, 12), skin),
+    boot: makeBoot(),
+  };
+  L.kneeMesh.castShadow = true;
+  scene.add(L.thigh, L.shank, L.kneeMesh, L.boot);
+  return L;
+}
+const kickLeg = makeLeg(0.0);
+const standLeg = makeLeg(-0.2);
+
+function solveLeg(hx, hy, tx, ty) {
+  const dx = tx - hx, dy = ty - hy;
+  const d = Math.hypot(dx, dy);
+  const dd = Math.min(Math.max(d, Math.abs(L_THIGH - L_SHANK) + 0.01), (L_THIGH + L_SHANK) * 0.998);
+  const phi = Math.atan2(dy, dx);
+  const cosA = (L_THIGH * L_THIGH + dd * dd - L_SHANK * L_SHANK) / (2 * L_THIGH * dd);
+  const a = Math.acos(Math.min(1, Math.max(-1, cosA)));
+  return {
+    knee: [hx + L_THIGH * Math.cos(phi + a), hy + L_THIGH * Math.sin(phi + a)],
+    ankle: [hx + dd * Math.cos(phi), hy + dd * Math.sin(phi)],
+  };
+}
+const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3();
+function poseLeg(L, tx, ty) {
+  const { knee, ankle } = solveLeg(HIP_X, HIP_Y, tx, ty);
+  _a.set(HIP_X, HIP_Y, L.z); _b.set(knee[0], knee[1], L.z); _c.set(ankle[0], ankle[1], L.z);
+  placeLimb(L.thigh, _a, _b);
+  placeLimb(L.shank, _b, _c);
+  L.kneeMesh.position.copy(_b);
+  L.boot.position.copy(_c);
+  const shankAng = Math.atan2(ankle[1] - knee[1], ankle[0] - knee[0]);
+  L.boot.rotation.z = shankAng + Math.PI / 2;
+  return ankle;
+}
+
+/* --- Позы ударной ноги (точка щиколотки; интерполяция по дуге вокруг бедра) --- */
+const polar = (x, y) => ({ a: Math.atan2(y - HIP_Y, x - HIP_X), r: Math.hypot(x - HIP_X, y - HIP_Y) });
+const P_IDLE = polar(-0.62, 0.09);
+const P_WIND = polar(-1.30, 0.62);
+const P_HIT  = polar(-0.40, 0.31);
+const P_FOLL = polar(0.20, 0.92);
+const lerp = (a, b, t) => a + (b - a) * t;
+const mixP = (p, q, t) => ({ a: lerp(p.a, q.a, t), r: lerp(p.r, q.r, t) });
+const easeInOut = t => t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+const easeOut = t => 1 - Math.pow(1 - t, 3);
+const easeIn = t => t * t;
+
+const PHASES = ['wind', 'swing', 'follow', 'hold', 'return'];
+const DUR = { wind: 0.45, swing: 0.16, follow: 0.32, hold: 0.9, return: 0.7 };
+const kick = { active: false, phase: 'wind', t: 0, vBall: 0, vFoot: 0 };
+
+function currentFootPolar() {
+  if (!kick.active) return P_IDLE;
+  const u = Math.min(kick.t / DUR[kick.phase], 1);
+  switch (kick.phase) {
+    case 'wind':   return mixP(P_IDLE, P_WIND, easeInOut(u));
+    case 'swing':  return mixP(P_WIND, P_HIT, easeIn(u));
+    case 'follow': return mixP(P_HIT, P_FOLL, easeOut(u));
+    case 'hold':   return P_FOLL;
+    case 'return': return mixP(P_FOLL, P_IDLE, easeInOut(u));
+  }
+}
+
+/* ===================== Физика мяча ===================== */
+const bs = {
+  pos: BALL_REST.clone(), vel: new THREE.Vector3(),
+  flying: false, onGround: true, rest: true, restTime: 0,
+  bounces: 0, firstLandX: null, maxH: 0, launchT: 0, flightT: 0,
+};
+function resetBall() {
+  bs.pos.copy(BALL_REST); bs.vel.set(0, 0, 0);
+  bs.flying = false; bs.onGround = true; bs.rest = true; bs.restTime = 0;
+  bs.bounces = 0; bs.firstLandX = null; bs.maxH = 0; bs.flightT = 0;
+  ball.rotation.set(0, 0, 0);
+  // резкий переход камеры к исходному ракурсу (плавный бы «ехал» десятки метров)
+  camera.position.copy(CAM_IDLE);
+  camLook.copy(LOOK_IDLE);
+}
+function groundHeight(x, z) {
+  return Math.hypot(x, z) < PLAT_R ? PLAT_H : 0;
+}
+function stepBall(dt) {
+  if (!bs.flying || bs.rest) return;
+  const v = bs.vel, p = bs.pos;
+  const sp = v.length();
+  const drag = 0.5 * RHO * CD * Math.PI * BALL_R * BALL_R / BALL_M * sp;
+  v.x -= drag * v.x * dt; v.y -= drag * v.y * dt; v.z -= drag * v.z * dt;
+  v.y -= G * dt;
+  p.addScaledVector(v, dt);
+  bs.flightT += dt;
+  bs.maxH = Math.max(bs.maxH, p.y - BALL_R);
+
+  const floor = groundHeight(p.x, p.z) + BALL_R;
+  if (p.y <= floor) {
+    p.y = floor;
+    if (bs.firstLandX === null && p.x > 0.5) { bs.firstLandX = p.x; onLanded(); }
+    if (Math.abs(v.y) > 1.2) {
+      v.y = -v.y * 0.62; v.x *= 0.86; v.z *= 0.86; bs.bounces++;
+    } else {
+      v.y = 0; bs.onGround = true;
+      const h = Math.hypot(v.x, v.z);
+      const dec = 1.6 * dt;                 // сопротивление качению
+      if (h <= dec) { v.x = 0; v.z = 0; bs.rest = true; }
+      else { v.x -= v.x / h * dec; v.z -= v.z / h * dec; }
+    }
+  }
+  // вращение
+  const spin = bs.onGround ? 1 : 0.35;
+  ball.rotation.z -= (v.x / BALL_R) * dt * spin;
+  ball.rotation.x += (v.z / BALL_R) * dt * spin;
+}
+
+/* ===================== Удар ===================== */
+function startKick(vBall, vFoot) {
+  resetBall();
+  kick.active = true; kick.phase = 'wind'; kick.t = 0;
+  kick.vBall = vBall; kick.vFoot = vFoot ?? vBall / 1.25;
+  // чем быстрее удар, тем короче замах
+  DUR.swing = Math.min(0.2, Math.max(0.07, 0.22 - (vBall - 8) * 0.0055));
+  ui.showPending(vBall, kick.vFoot);
+}
+function launchBall() {
+  const th = THREE.MathUtils.degToRad(+angEl.value);
+  bs.vel.set(Math.cos(th) * kick.vBall, Math.sin(th) * kick.vBall, 0);
+  bs.flying = true; bs.rest = false; bs.onGround = false; bs.flightT = 0;
+}
+function onLanded() {
+  ui.setDetail(bs.firstLandX, bs.maxH);
+}
+function advanceKick(dt) {
+  if (!kick.active) return;
+  kick.t += dt;
+  while (kick.active && kick.t >= DUR[kick.phase]) {
+    kick.t -= DUR[kick.phase];
+    const i = PHASES.indexOf(kick.phase);
+    if (kick.phase === 'swing') launchBall();
+    if (i === PHASES.length - 1) { kick.active = false; break; }
+    kick.phase = PHASES[i + 1];
+  }
+  // после остановки мяча возвращаем его на платформу
+  if (kick.active && kick.phase === 'return' && bs.rest && !bs.onPlatformReset) { /* мяч вернём ниже */ }
+}
+
+/* ===================== Камера ===================== */
+const camDesired = new THREE.Vector3(), lookDesired = new THREE.Vector3();
+function updateCamera(dt) {
+  if (bs.flying && !bs.rest) {
+    camDesired.set(bs.pos.x - 4.5, Math.max(1.4, bs.pos.y * 0.6 + 1.2), 6.0);
+    lookDesired.set(bs.pos.x + 2.0, Math.max(0.5, bs.pos.y * 0.7), 0);
+  } else if (bs.flying && bs.rest) {
+    camDesired.set(bs.pos.x - 3.5, 1.5, 5.0);
+    lookDesired.set(bs.pos.x, 0.3, 0);
+  } else {
+    camDesired.copy(CAM_IDLE); lookDesired.copy(LOOK_IDLE);
+  }
+  const k = 1 - Math.exp(-(bs.flying ? 2.6 : 3.5) * dt);
+  camera.position.lerp(camDesired, k);
+  camLook.lerp(lookDesired, k);
+  camera.lookAt(camLook);
+}
+
+/* ===================== Интерфейс ===================== */
+const $ = id => document.getElementById(id);
+const angEl = $('ang'), vTestEl = $('vTest');
+const fmt1 = n => n.toLocaleString('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+const history = [];
+let shown = 0, shownTarget = 0;
+
+const ui = {
+  showPending(v, vf) {
+    shownTarget = v;
+    $('dFoot').textContent = fmt1(vf) + ' м/с';
+    $('dDist').textContent = '…';
+    $('dH').textContent = '…';
+    history.push(v);
+    if (history.length > 6) history.shift();
+    this.renderHistory();
+  },
+  setDetail(dist, h) {
+    $('dDist').textContent = fmt1(dist) + ' м';
+    $('dH').textContent = fmt1(h) + ' м';
+  },
+  renderHistory() {
+    const list = $('histList');
+    const best = Math.max(...history);
+    list.innerHTML = '';
+    [...history].reverse().forEach((v, i) => {
+      const li = document.createElement('li');
+      if (v === best) li.className = 'best';
+      li.innerHTML = `<span>#${history.length - i}</span><span>${fmt1(v)} м/с</span>`;
+      list.appendChild(li);
+    });
+  },
+  setStatus(kind, text) {
+    $('dot').className = 'dot ' + kind;
+    $('statusText').textContent = text;
+  },
+};
+
+function updateHud(dt) {
+  shown += (shownTarget - shown) * (1 - Math.exp(-8 * dt));
+  if (Math.abs(shownTarget - shown) < 0.005) shown = shownTarget;
+  $('speed').innerHTML = `${fmt1(shown)}<small>м/с</small>`;
+  $('kmh').textContent = `${Math.round(shown * 3.6)} км/ч`;
+}
+
+$('ang').addEventListener('input', () => $('angVal').textContent = angEl.value + '°');
+vTestEl.addEventListener('input', () => $('vTestVal').textContent = vTestEl.value + ' м/с');
+$('btnKick').addEventListener('click', () => startKick(+vTestEl.value));
+$('btnReset').addEventListener('click', () => { kick.active = false; resetBall(); shownTarget = 0; });
+addEventListener('keydown', e => {
+  if (e.code === 'Space' && e.target.tagName !== 'BUTTON') { e.preventDefault(); startKick(+vTestEl.value); }
+});
+
+/* ===================== Web Serial (ESP32) ===================== */
+let port = null, reader = null, closing = false;
+let meterPeak = 0, meterPeakAge = 0;
+const hasSerial = 'serial' in navigator;
+if (!hasSerial) {
+  $('btnConnect').disabled = true;
+  ui.setStatus('err', 'Браузер без Web Serial');
+}
+
+function handleLine(line) {
+  if (!line) return;
+  const p = line.split(',');
+  switch (p[0]) {
+    case 'READY': ui.setStatus('ok', 'Готово. Бей по мячу!'); break;
+    case 'ERR': ui.setStatus('err', p.slice(1).join(',')); break;
+    case 'D': {
+      const w = +p[2];
+      const frac = Math.min(1, w / 2000);
+      $('meterFill').style.width = (frac * 100) + '%';
+      $('meterVal').textContent = Math.round(w) + ' °/с';
+      if (frac > meterPeak) { meterPeak = frac; meterPeakAge = 0; }
+      $('meterPeak').style.left = `calc(${meterPeak * 100}% - 3px)`;
+      break;
+    }
+    case 'K': {
+      const vFoot = +p[1], vBall = +p[2];
+      if (isFinite(vBall) && vBall > 0) startKick(vBall, vFoot);
+      break;
+    }
+  }
+}
+
+async function connect() {
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+  } catch (e) {
+    ui.setStatus('err', 'Не удалось открыть порт');
+    port = null; return;
+  }
+  closing = false;
+  $('btnConnect').hidden = true; $('btnDisconnect').hidden = false;
+  ui.setStatus('wait', 'Калибровка… держи ногу неподвижно');
+  const dec = new TextDecoderStream();
+  const piped = port.readable.pipeTo(dec.writable).catch(() => {});
+  reader = dec.readable.getReader();
+  let buf = '';
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += value;
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) { handleLine(buf.slice(0, i).trim()); buf = buf.slice(i + 1); }
+    }
+  } catch (e) { /* порт отключили */ }
+  try { reader.releaseLock(); } catch (e) {}
+  await piped;
+  try { await port.close(); } catch (e) {}
+  port = null; reader = null;
+  $('btnConnect').hidden = false; $('btnDisconnect').hidden = true;
+  ui.setStatus(closing ? '' : 'err', closing ? 'Не подключено' : 'Связь потеряна');
+}
+async function disconnect() {
+  closing = true;
+  try { await reader?.cancel(); } catch (e) {}
+}
+$('btnConnect').addEventListener('click', connect);
+$('btnDisconnect').addEventListener('click', disconnect);
+
+/* ===================== Главный цикл ===================== */
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.fov = w / h < 0.8 ? 60 : 45;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+resize();
+
+resetBall();
+const clock = new THREE.Clock();
+let restTimer = 0;
+
+function tick(dt) {
+  advanceKick(dt);
+  // физика мяча подшагами
+  const n = Math.max(1, Math.ceil(dt / (1 / 240)));
+  for (let i = 0; i < n; i++) stepBall(dt / n);
+
+  // возврат мяча на платформу после остановки
+  if (bs.flying && bs.rest) {
+    restTimer += dt;
+    if (restTimer > 2.2) { restTimer = 0; resetBall(); }
+  } else restTimer = 0;
+
+  // позы ног
+  const fp = currentFootPolar();
+  poseLeg(kickLeg, HIP_X + Math.cos(fp.a) * fp.r, HIP_Y + Math.sin(fp.a) * fp.r);
+  poseLeg(standLeg, -0.55, 0.075);
+
+  // мяч и тень
+  ball.position.copy(bs.pos);
+  const h = Math.max(0, bs.pos.y - BALL_R - groundHeight(bs.pos.x, bs.pos.z));
+  blob.position.set(bs.pos.x, groundHeight(bs.pos.x, bs.pos.z) + 0.012, bs.pos.z);
+  const s = 1 / (1 + h * 0.25);
+  blob.scale.setScalar(s); blob.material.opacity = 0.38 * s;
+
+  // пик на шкале угловой скорости медленно опускается
+  meterPeakAge += dt;
+  if (meterPeakAge > 2) { meterPeak = Math.max(0, meterPeak - dt * 0.4); $('meterPeak').style.left = `calc(${meterPeak * 100}% - 3px)`; }
+
+  updateCamera(dt);
+  updateHud(dt);
+  renderer.render(scene, camera);
+}
+function frame() {
+  tick(Math.min(clock.getDelta(), 0.05));
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// для отладки из консоли браузера
+window.kickTest = (v = 22) => startKick(v);
+window.advance = (sec, step = 1 / 60) => { for (let t = 0; t < sec; t += step) tick(step); };
+</script>
+</body>
+</html>
